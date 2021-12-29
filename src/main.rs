@@ -2,10 +2,12 @@ use std::io::BufWriter;
 
 use anyhow::Context;
 use fs_err::OpenOptions;
+use log::error;
 use pollster::block_on;
 use simplelog::{CombinedLogger, LevelFilter, TermLogger, WriteLogger};
 use wgpu::{
-    Backends, DeviceDescriptor, RequestAdapterOptions, SurfaceConfiguration, TextureUsages,
+    Backends, Device, DeviceDescriptor, LoadOp, RenderPassColorAttachment, RenderPassDescriptor,
+    RequestAdapterOptions, Surface, SurfaceConfiguration, SurfaceError, TextureUsages, Queue,
 };
 use winit::{
     event::{Event, WindowEvent},
@@ -55,7 +57,7 @@ fn main() -> anyhow::Result<()> {
     }))
     .context("Failed to request an adapter")?;
     // Connects a physical device to create a logical device
-    let (device, _queue) = block_on(adapter.request_device(
+    let (device, queue) = block_on(adapter.request_device(
         &DeviceDescriptor {
             label: None,
             features: wgpu::Features::empty(),
@@ -85,13 +87,50 @@ fn main() -> anyhow::Result<()> {
                 new_inner_size: &mut size,
                 ..
             } => {
-                dbg!(size);
                 config.width = size.width.max(1);
                 config.height = size.height.max(1);
                 surface.configure(&device, &config);
             }
             _ => {}
         },
+        Event::RedrawRequested(window_id) if window_id == window.id() => {
+            // self.update();
+            match render(&device, &queue, &surface) {
+                Ok(_) => {}
+                Err(SurfaceError::Lost) => surface.configure(&device, &config),
+                Err(SurfaceError::OutOfMemory) => *control_flow = ControlFlow::Exit,
+                Err(e) => error!("{:?}", e),
+            }
+        }
+        Event::MainEventsCleared => {
+            window.request_redraw();
+        }
         _ => {}
     })
+}
+
+fn render(device: &Device, queue: &Queue, surface: &Surface) -> Result<(), wgpu::SurfaceError> {
+    let output = surface.get_current_texture()?;
+    let view = &output.texture.create_view(&Default::default());
+    let mut encoder = device.create_command_encoder(&Default::default());
+    encoder.begin_render_pass(&RenderPassDescriptor {
+        label: None,
+        depth_stencil_attachment: None,
+        color_attachments: &[RenderPassColorAttachment {
+            view,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: LoadOp::Clear(wgpu::Color {
+                    r: 0.1,
+                    g: 0.2,
+                    b: 0.3,
+                    a: 1.0,
+                }),
+                store: true,
+            },
+        }],
+    });
+    queue.submit([encoder.finish()]);
+    output.present();
+    Ok(())
 }
